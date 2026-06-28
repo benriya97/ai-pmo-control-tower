@@ -1,0 +1,4 @@
+resource_id,name,capacity,allocated
+1,Alice,40,45
+2,Bob,40,30
+3,Charlie,40,42
