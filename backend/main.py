@@ -3,9 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 import os
 
+# Import the modern LangChain Ollama library
+from langchain_ollama import OllamaLLM
+
 app = FastAPI(title="AI PMO Control Tower API")
 
-# CRITICAL FOR WEEK 3: This allows your React frontend to talk to your backend safely
+# Allow your future React frontend to talk to this backend safely
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -23,6 +26,10 @@ RESOURCES_PATH = os.path.join(BASE_DIR, "../data/resources.csv")
 tasks = pd.read_csv(TASKS_PATH)
 resources = pd.read_csv(RESOURCES_PATH)
 
+# Initialize your local AI model (using the llama3.2 model you downloaded)
+# Note: If you downloaded a different model, change the string below!
+llm = OllamaLLM(model="llama3.2")
+
 @app.get("/")
 def home():
     return {"message": "AI PMO Control Tower running"}
@@ -36,9 +43,7 @@ def get_resources():
     return resources.to_dict(orient="records")
 
 def calculate_health():
-    # Overdue tasks = anything not 100% complete
     overdue = tasks[tasks["progress"] < 100]
-    # Overloaded resources = allocated hours exceed capacity hours
     overloaded = resources[resources["allocated"] > resources["capacity"]]
     
     score = 100
@@ -64,3 +69,52 @@ def detect_risks():
 @app.get("/risks")
 def risks():
     return detect_risks()
+
+# === NEW: AI ADVISOR ENDPOINT ===
+@app.get("/advisor")
+def advisor():
+    # 1. Gather current live data from our calculation engines
+    score = calculate_health()
+    active_risks = detect_risks()
+    
+    # 2. Design the prompt for our local AI
+    prompt = f"""
+    You are an expert AI PMO Assistant (Project Management Office).
+    
+    Analyze the following project metrics:
+    - Overall Project Health Score: {score}/100
+    - Identified Risks: {active_risks}
+    
+    Provide a professional, brief, and actionable project summary for the Project Manager.
+    Include:
+    1. A quick assessment of the current state ("What is happening and why")
+    2. Concrete, step-by-step actions they should take immediately to resolve the resource overload and task delays.
+    
+    Keep the response concise, realistic, and highly practical.
+    """
+    
+    # 3. Ask the local LLM to think and return its answer
+    response = llm.invoke(prompt)
+    
+    return {
+        "health_score": score,
+        "risks": active_risks,
+        "recommendation": response
+    }
+
+@app.get("/dependencies")
+def dependencies():
+    dependent_tasks = tasks[tasks["dependency"].notna()]
+    
+    blocked = []
+    for _, row in dependent_tasks.iterrows():
+        dep_id = row["dependency"]
+        dep_task = tasks[tasks["task_id"] == dep_id]
+        if not dep_task.empty and dep_task.iloc[0]["progress"] < 100:
+            blocked.append({
+                "task_id": int(row["task_id"]),
+                "task_name": str(row["task_name"]),
+                "blocked_by": str(dep_task.iloc[0]["task_name"]),
+                "blocked_by_progress": int(dep_task.iloc[0]["progress"])
+            })
+    return {"blocked_tasks": blocked}
