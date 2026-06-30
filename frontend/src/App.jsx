@@ -5,6 +5,7 @@ function App() {
   const [healthScore, setHealthScore] = useState(null);
   const [risks, setRisks] = useState(null);
   const [advisor, setAdvisor] = useState(null);
+  const [dependencies,setDependencies] = useState(null);
 
   // Fetch health score — same as before.
   useEffect(() => {
@@ -30,6 +31,13 @@ function App() {
       .then((response) => response.json())
       .then((data) => setAdvisor(data.recommendation))
       .catch((error) => console.error("Error fetching advisor:", error));
+  }, []);
+
+  useEffect(() => {
+  fetch("http://127.0.0.1:8000/dependencies")
+    .then((response) => response.json())
+    .then((data) => setDependencies(data.blocked_tasks))
+    .catch((error) => console.error("Error fetching dependencies:", error));
   }, []);
 
   return (
@@ -59,6 +67,23 @@ function App() {
       <p style={{ whiteSpace: "pre-wrap" }}>
         {advisor === null ? "Loading... (this may take a few seconds)" : advisor}
       </p>
+
+      <h2>Dependencies</h2>
+        {dependencies === null ? (
+          <p>Loading...</p>
+        ) : dependencies.length === 0 ? (
+          <p>No blocked tasks.</p>
+        ) : (
+          <ul>
+            {dependencies.map((dep) => (
+              <li key={dep.task_id}>
+                <strong>{dep.task_name}</strong> is blocked by{" "}
+                <strong>{dep.blocked_by}</strong> ({dep.blocked_by_progress}% complete)
+              </li>
+            ))}
+          </ul>
+        )}
+
     </div>
   );
 }
