@@ -1,25 +1,64 @@
 import { useState, useEffect } from "react";
 
 function App() {
-  // "healthScore" holds the value we get back from the backend.
-  // useState(null) means it starts as "nothing yet" until the fetch completes.
+  // One "box" per piece of data we're fetching from the backend.
   const [healthScore, setHealthScore] = useState(null);
+  const [risks, setRisks] = useState(null);
+  const [advisor, setAdvisor] = useState(null);
 
-  // useEffect runs code automatically when the component loads on screen.
-  // The empty array [] at the end means "only run this once, when the page first loads."
+  // Fetch health score — same as before.
   useEffect(() => {
     fetch("http://127.0.0.1:8000/health")
-      .then((response) => response.json())   // convert the raw response into JSON
-      .then((data) => setHealthScore(data.health_score))  // store the number we got
+      .then((response) => response.json())
+      .then((data) => setHealthScore(data.health_score))
       .catch((error) => console.error("Error fetching health score:", error));
   }, []);
 
+  // Fetch risks — same pattern, different endpoint.
+  // Note: /risks returns a plain list, e.g. ["Tasks are delayed", "Resources are overloaded"]
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/risks")
+      .then((response) => response.json())
+      .then((data) => setRisks(data))
+      .catch((error) => console.error("Error fetching risks:", error));
+  }, []);
+
+  // Fetch the AI advisor recommendation — this one takes longer since it calls Ollama,
+  // so expect "Loading..." to show for a few seconds before it appears.
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/advisor")
+      .then((response) => response.json())
+      .then((data) => setAdvisor(data.recommendation))
+      .catch((error) => console.error("Error fetching advisor:", error));
+  }, []);
+
   return (
-    <div style={{ padding: "40px", fontFamily: "sans-serif" }}>
+    <div style={{ padding: "40px", fontFamily: "sans-serif", maxWidth: "700px" }}>
       <h1>AI PMO Control Tower</h1>
+
       <h2>Project Health Score</h2>
-      {/* While healthScore is still null, show "Loading...". Once it arrives, show the number. */}
       <p>{healthScore === null ? "Loading..." : `${healthScore}/100`}</p>
+
+      <h2>Risks</h2>
+      {risks === null ? (
+        <p>Loading...</p>
+      ) : risks.length === 0 ? (
+        <p>No risks detected.</p>
+      ) : (
+        <ul>
+          {/* .map() turns each item in the risks list into its own <li> bullet point.
+              "key" is something React requires for lists, to track each item individually. */}
+          {risks.map((risk, index) => (
+            <li key={index}>{risk}</li>
+          ))}
+        </ul>
+      )}
+
+      <h2>AI Advisor Recommendation</h2>
+      {/* whiteSpace: "pre-wrap" makes the \n line breaks in the AI's text actually show as line breaks */}
+      <p style={{ whiteSpace: "pre-wrap" }}>
+        {advisor === null ? "Loading... (this may take a few seconds)" : advisor}
+      </p>
     </div>
   );
 }
