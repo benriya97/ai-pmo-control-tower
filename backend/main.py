@@ -359,9 +359,9 @@ def dependencies():
         # Find the row for the task THIS task depends on.
         dep_task = tasks[tasks["task_id"] == dep_id]
 
-        # If that dependency task exists AND isn't finished yet (progress < 100),
-        # then the current task is considered "blocked".
-        if not dep_task.empty and dep_task.iloc[0]["progress"] < 100:
+        # A task can only be "blocked" if it isn't finished yet.
+        # (A completed task is never blocked, regardless of its dependency.)
+        if row["progress"] < 100 and not dep_task.empty and dep_task.iloc[0]["progress"] < 100:
             blocked.append({
                 # int()/str() wrap numpy types into plain Python types so FastAPI
                 # can convert them to JSON without errors.
