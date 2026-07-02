@@ -5,6 +5,7 @@
 
 # --- FastAPI: the web framework that turns our Python functions into API endpoints ---
 from fastapi import FastAPI
+from pydantic import BaseModel # define the shape of the data we expect to receive
 
 # --- CORS middleware: lets a browser-based frontend (like React) call this API ---
 # Without this, browsers block requests from a different "origin" (domain/port) by default.
@@ -15,6 +16,8 @@ import pandas as pd
 
 # --- os: used to build file paths that work regardless of which machine/OS runs this ---
 import os
+
+import sqlite3
 
 # --- LangChain's Ollama wrapper: lets us "talk" to a local LLM (e.g. llama3.2) running via Ollama ---
 from langchain_ollama import OllamaLLM
@@ -49,21 +52,22 @@ app.add_middleware(
 # DATA LOADING
 # =========================================================
 
-# BASE_DIR = the folder this file (main.py) lives in.
-# Using this instead of a hardcoded path means the code works no matter where the project
-# folder is located on disk (your machine, a teammate's machine, a server, etc.).
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Build full paths to the CSV files, which live one folder up, inside "data/".
-TASKS_PATH = os.path.join(BASE_DIR, "../data/tasks.csv")
-RESOURCES_PATH = os.path.join(BASE_DIR, "../data/resources.csv")
+# Path to the SQLite database (created by seed_db.py).
+DB_PATH = os.path.join(BASE_DIR, "../data/pmo.db")
 
-# Load both CSVs into pandas DataFrames (table-like objects) when the app starts.
-# NOTE: this means the data is loaded ONCE at startup — if you edit the CSV files while
-# the server is running, you won't see the changes until you restart the server.
-tasks = pd.read_csv(TASKS_PATH)
-resources = pd.read_csv(RESOURCES_PATH)
-
+# --- Helper: read a table from SQLite into a DataFrame, fresh, on every call ---
+# Why a function instead of loading once at startup?
+# Because data can now be UPDATED (via POST endpoints in Stage 3). Reading fresh
+# each time means every request sees the CURRENT state, not a frozen startup snapshot.
+# pd.read_sql runs a SQL query and hands back a DataFrame — so the rest of your
+# pandas engine code (filtering, .empty, etc.) works EXACTLY as before.
+def load_table(table_name):
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
+    conn.close()
+    return df
 
 # =========================================================
 # AI MODEL SETUP
@@ -105,14 +109,70 @@ def home():
 # e.g. [{"task_id": 1, "task_name": "Define scope", ...}, {...}, ...]
 @app.get("/tasks")
 def get_tasks():
-    return tasks.to_dict(orient="records")
+    return load_table("tasks").to_dict(orient="records")
 
 
 # Same idea, but for resources.csv.
 @app.get("/resources")
 def get_resources():
-    return resources.to_dict(orient="records")
+    return load_table("resources").to_dict(orient="records")
 
+
+# =========================================================
+# UPDATE ENDPOINTS (POST — these CHANGE data, unlike GET which only reads)
+# =========================================================
+
+# --- Define the shape of the data each endpoint expects to receive ---
+# Pydantic validates incoming JSON against these. If the client sends the wrong
+# type (e.g. text where a number is expected), FastAPI auto-rejects with a 422 error.
+
+class ProgressUpdate(BaseModel):
+    task_id: int
+    progress: int   # 0-100
+
+class AllocationUpdate(BaseModel):
+    resource_id: int
+    allocated: int
+
+
+# --- Helper: run a write query against SQLite ---
+# Unlike load_table (which SELECTs/reads), this runs UPDATE (which writes/changes).
+# conn.commit() is REQUIRED for writes — it saves the change permanently.
+# Without commit(), the change is discarded when the connection closes.
+def run_update(query, params):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(query, params)   # params are passed separately (prevents SQL injection)
+    conn.commit()                   # SAVE the change — essential for writes
+    rows_changed = cursor.rowcount  # how many rows were actually updated
+    conn.close()
+    return rows_changed
+
+
+# --- Update a task's progress ---
+@app.post("/tasks/update-progress")
+def update_task_progress(update: ProgressUpdate):
+    # FastAPI automatically parses the incoming JSON into an ProgressUpdate object.
+    # The "?" are placeholders — SQLite fills them with the params safely.
+    rows = run_update(
+        "UPDATE tasks SET progress = ? WHERE task_id = ?",
+        (update.progress, update.task_id)
+    )
+    if rows == 0:
+        return {"success": False, "message": f"No task found with id {update.task_id}"}
+    return {"success": True, "message": f"Task {update.task_id} progress set to {update.progress}%"}
+
+
+# --- Update a resource's allocation ---
+@app.post("/resources/update-allocation")
+def update_resource_allocation(update: AllocationUpdate):
+    rows = run_update(
+        "UPDATE resources SET allocated = ? WHERE resource_id = ?",
+        (update.allocated, update.resource_id)
+    )
+    if rows == 0:
+        return {"success": False, "message": f"No resource found with id {update.resource_id}"}
+    return {"success": True, "message": f"Resource {update.resource_id} allocation set to {update.allocated}"}
 
 # =========================================================
 # HEALTH SCORE ENGINE
@@ -120,6 +180,10 @@ def get_resources():
 
 # This is plain Python/pandas logic — NOT AI. It just counts problems and subtracts points.
 def calculate_health():
+    
+    tasks = load_table("tasks")           # NEW — read current data
+    resources = load_table("resources")   # NEW
+    
     # Filter tasks down to only rows where progress is less than 100 (i.e. not finished).
     overdue = tasks[tasks["progress"] < 100]
 
@@ -147,6 +211,10 @@ def health():
 
 # Also plain logic — flags risk categories based on the same filters as above.
 def detect_risks():
+
+    tasks = load_table("tasks")           # NEW
+    resources = load_table("resources")   # NEW
+
     risks_list = []
 
     overdue = tasks[tasks["progress"] < 100]
@@ -259,6 +327,9 @@ def advisor():
 
 @app.get("/dependencies")
 def dependencies():
+
+    tasks = load_table("tasks")           # NEW — everything below is unchanged
+
     # Keep only tasks that actually have a dependency listed (not blank/NaN).
     dependent_tasks = tasks[tasks["dependency"].notna()]
 
