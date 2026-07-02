@@ -161,15 +161,22 @@ def run_update(query, params):
 # --- Update a task's progress ---
 @app.post("/tasks/update-progress")
 def update_task_progress(update: ProgressUpdate):
-    # FastAPI automatically parses the incoming JSON into an ProgressUpdate object.
-    # The "?" are placeholders — SQLite fills them with the params safely.
+    # Derive status from progress so the two never contradict each other.
+    if update.progress == 0:
+        status = "Not Started"
+    elif update.progress == 100:
+        status = "Done"
+    else:
+        status = "In Progress"
+
+    # Update BOTH columns together, in one query — keeps them in sync.
     rows = run_update(
-        "UPDATE tasks SET progress = ? WHERE task_id = ?",
-        (update.progress, update.task_id)
+        "UPDATE tasks SET progress = ?, status = ? WHERE task_id = ?",
+        (update.progress, status, update.task_id)
     )
     if rows == 0:
         return {"success": False, "message": f"No task found with id {update.task_id}"}
-    return {"success": True, "message": f"Task {update.task_id} progress set to {update.progress}%"}
+    return {"success": True, "message": f"Task {update.task_id} set to {update.progress}% ({status})"}
 
 
 # --- Update a resource's allocation ---
