@@ -12,6 +12,10 @@ function App() {
   const [newProgress, setNewProgress] = useState("");
   const [updateMsg, setUpdateMsg] = useState("");  // feedback after an update
 
+  // NEW — hold the raw task and resource rows
+  const [tasks, setTasks] = useState(null);
+  const [resources, setResources] = useState(null);
+
   // --- Fetch functions pulled OUT of useEffect so we can call them again later ---
   // (Before, these lived inside useEffect and only ran once. Now they're reusable.)
   const fetchHealth = () => {
@@ -44,14 +48,6 @@ function App() {
       .catch((e) => console.error("advisor:", e));
   };
 
-  // --- Run all fetches once on page load ---
-  useEffect(() => {
-    fetchHealth();
-    fetchRisks();
-    fetchDependencies();
-    fetchAdvisor();
-  }, []);
-
   // --- NEW: send a POST to update a task's progress, then refresh the display ---
   const handleUpdateProgress = () => {
     // Basic guard: don't send if fields are empty.
@@ -76,6 +72,8 @@ function App() {
         fetchRisks();
         fetchDependencies();
         // (advisor not auto-refreshed — click the button below to regenerate it)
+        fetchTasks();        // NEW — refresh the task table
+        fetchResources();    // NEW — refresh the resource table
       })
       .catch((e) => {
         console.error("update:", e);
@@ -83,10 +81,103 @@ function App() {
       });
   };
 
+  const fetchTasks = () => {
+    fetch("http://127.0.0.1:8000/tasks")
+      .then((r) => r.json())
+      .then((data) => setTasks(data))
+      .catch((e) => console.error("tasks:", e));
+  };
+
+  const fetchResources = () => {
+    fetch("http://127.0.0.1:8000/resources")
+      .then((r) => r.json())
+      .then((data) => setResources(data))
+      .catch((e) => console.error("resources:", e));
+  };
+
+  // --- Run all fetches once on page load ---
+  useEffect(() => {
+    fetchHealth();
+    fetchRisks();
+    fetchDependencies();
+    fetchAdvisor();
+    fetchTasks();        // NEW
+    fetchResources();    // NEW
+  }, []);
+
   return (
     <div style={{ padding: "40px", fontFamily: "sans-serif", maxWidth: "700px" }}>
       <h1>AI PMO Control Tower</h1>
+        {/* NEW — Tasks table */}
+      <h2>Tasks</h2>
+      {tasks === null ? (
+        <p>Loading...</p>
+      ) : (
+        <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "24px" }}>
+          <thead>
+            <tr style={{ background: "#eee", textAlign: "left" }}>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>ID</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Task</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Owner</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Progress</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((t) => (
+              <tr key={t.task_id}>
+                <td style={{ padding: "8px", border: "1px solid #ccc" }}>{t.task_id}</td>
+                <td style={{ padding: "8px", border: "1px solid #ccc" }}>{t.task_name}</td>
+                <td style={{ padding: "8px", border: "1px solid #ccc" }}>{t.owner}</td>
+                {/* progress cell turns green at 100%, otherwise plain */}
+                <td style={{
+                  padding: "8px", border: "1px solid #ccc",
+                  color: t.progress === 100 ? "green" : "#333",
+                  fontWeight: t.progress === 100 ? "bold" : "normal",
+                }}>
+                  {t.progress}%
+                </td>
+                <td style={{ padding: "8px", border: "1px solid #ccc" }}>{t.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
 
+      {/* NEW — Resources table */}
+      <h2>Resources</h2>
+      {resources === null ? (
+        <p>Loading...</p>
+      ) : (
+        <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "24px" }}>
+          <thead>
+            <tr style={{ background: "#eee", textAlign: "left" }}>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>ID</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Name</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Allocated</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Capacity</th>
+              <th style={{ padding: "8px", border: "1px solid #ccc" }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {resources.map((r) => {
+              // A resource is overloaded if allocated exceeds capacity.
+              const overloaded = r.allocated > r.capacity;
+              return (
+                <tr key={r.resource_id} style={{ background: overloaded ? "#ffe6e6" : "transparent" }}>
+                  <td style={{ padding: "8px", border: "1px solid #ccc" }}>{r.resource_id}</td>
+                  <td style={{ padding: "8px", border: "1px solid #ccc" }}>{r.name}</td>
+                  <td style={{ padding: "8px", border: "1px solid #ccc" }}>{r.allocated}</td>
+                  <td style={{ padding: "8px", border: "1px solid #ccc" }}>{r.capacity}</td>
+                  <td style={{ padding: "8px", border: "1px solid #ccc", color: overloaded ? "red" : "green", fontWeight: "bold" }}>
+                    {overloaded ? `Overloaded (+${r.allocated - r.capacity})` : "OK"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
       <h2>Project Health Score</h2>
       <p style={{ fontSize: "24px", fontWeight: "bold" }}>
         {healthScore === null ? "Loading..." : `${healthScore}/100`}

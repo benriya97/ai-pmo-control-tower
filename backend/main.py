@@ -28,6 +28,7 @@ import chromadb
 # --- datetime: used to timestamp each piece of memory we save ---
 from datetime import datetime
 
+import math  # add this at the top of main.py with the other imports, if not already there
 
 # =========================================================
 # APP SETUP
@@ -109,7 +110,15 @@ def home():
 # e.g. [{"task_id": 1, "task_name": "Define scope", ...}, {...}, ...]
 @app.get("/tasks")
 def get_tasks():
-    return load_table("tasks").to_dict(orient="records")
+    df = load_table("tasks")
+    records = df.to_dict(orient="records")   # convert to plain Python dicts first
+    # Now walk every value and replace any NaN float with None.
+    # This runs AFTER leaving pandas, so there's no float-column coercion to undo it.
+    for row in records:
+        for key, value in row.items():
+            if isinstance(value, float) and math.isnan(value):
+                row[key] = None
+    return records
 
 
 # Same idea, but for resources.csv.
