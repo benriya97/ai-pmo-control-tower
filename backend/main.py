@@ -173,51 +173,83 @@ def risks():
 
 @app.get("/advisor")
 def advisor():
-    # --- Step 1: Gather real findings from our own (non-AI) logic above ---
+    # --- Step 1: Gather real findings from our own (non-AI) logic ---
     score = calculate_health()
     active_risks = detect_risks()
 
-    # --- Step 2: Build the text prompt we'll hand to the LLM ---
-    # This is the ONLY information the AI will see — it has no access to the CSVs directly.
+    # =========================================================
+    # NEW — Step 1.5: RETRIEVE past recommendations (the RAG read step)
+    # =========================================================
+    # We build a short text description of the CURRENT situation, then ask Chroma
+    # to find the past recommendations most SIMILAR IN MEANING to it.
+    # Chroma embeds this query string automatically and compares it against the
+    # embeddings of everything we've stored — returning the closest matches.
+    # This is the "retrieval" in Retrieval-Augmented Generation.
+    current_situation = f"Health score {score}. Risks: {active_risks}"
+
+    # Ask Chroma for the 2 most semantically similar past entries.
+    # n_results=2 keeps the prompt short; raise it once you have more history.
+    past = memory_collection.query(
+        query_texts=[current_situation],
+        n_results=2
+    )
+
+    # Chroma returns results in a nested structure: documents is a list-of-lists
+    # (one inner list per query — we only sent one query, so we want past["documents"][0]).
+    # On the very first run the DB is empty, so guard against that.
+    retrieved_docs = past["documents"][0] if past["documents"] else []
+
+    # Turn the retrieved past recommendations into a readable block for the prompt.
+    # If there's no history yet, say so plainly so the AI doesn't hallucinate a past.
+    if retrieved_docs:
+        history_context = "\n\n".join(
+            f"- Previous recommendation: {doc}" for doc in retrieved_docs
+        )
+    else:
+        history_context = "No previous recommendations on record (this is the first analysis)."
+
+    # --- Step 2: Build the prompt — NOW AUGMENTED with retrieved history ---
+    # This is the "augmented" in RAG: the retrieved context is injected into the prompt.
     prompt = f"""
     You are an expert AI PMO Assistant (Project Management Office).
-    
-    Analyze the following project metrics:
+
+    CURRENT project metrics:
     - Overall Project Health Score: {score}/100
     - Identified Risks: {active_risks}
-    
-    Provide a professional, brief, and actionable project summary for the Project Manager.
-    Include:
-    1. A quick assessment of the current state ("What is happening and why")
-    2. Concrete, step-by-step actions they should take immediately to resolve the resource overload and task delays.
-    
+
+    RELEVANT PAST RECOMMENDATIONS (retrieved from memory):
+    {history_context}
+
+    Using both the current metrics AND the past recommendations above:
+    1. A quick assessment of the current state.
+    2. Whether the situation appears to have improved, stayed the same, or worsened
+       compared to the past recommendations — and what that implies (e.g. if the same
+       risk keeps appearing, earlier advice may not have been acted on).
+    3. Concrete, step-by-step actions to take immediately.
+
     Keep the response concise, realistic, and highly practical.
     """
 
-    # --- Step 3: Send the prompt to the local LLM and get back generated text ---
+    # --- Step 3: Send the augmented prompt to the local LLM ---
     response = llm.invoke(prompt)
 
-    # --- Step 4: Save this advisor run into Chroma memory for later reference ---
-    # documents: the actual text content Chroma will index for future similarity search.
-    # metadatas: extra structured info we attach to this entry (not searched by meaning,
-    #            but useful for filtering/inspecting later).
-    # ids: a unique identifier per entry — required by Chroma. Using a timestamp guarantees
-    #      no two entries ever collide.
+    # --- Step 4: Save this run into Chroma (the write step — unchanged) ---
     memory_collection.add(
         documents=[response],
         metadatas=[{
             "health_score": score,
-            "risks": str(active_risks),   # stored as a string since metadata must be simple types
+            "risks": str(active_risks),
             "timestamp": datetime.now().isoformat()
         }],
         ids=[f"advisor_{datetime.now().timestamp()}"]
     )
 
-    # --- Step 5: Return everything to whoever called this endpoint ---
+    # --- Step 5: Return everything (now including what we retrieved, for transparency) ---
     return {
         "health_score": score,
         "risks": active_risks,
-        "recommendation": response
+        "recommendation": response,
+        "retrieved_past_count": len(retrieved_docs)  # NEW — proves retrieval ran
     }
 
 
